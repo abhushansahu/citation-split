@@ -1,0 +1,14 @@
+# built locally by build-driver.sh / build-app.sh
+driver/
+app/CitationSplit.app/
+app/setvol
+blackhole-src/
+# environment
+venv/
+unbrick/venv/
+__pycache__/
+# machine-specific / runtime
+latency.json
+service.log
+tmp/
+.DS_Store

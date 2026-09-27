@@ -1,0 +1,29 @@
+bcdUSB 0x200 class 0xef bcdDevice 0x1 numcfg 1
+
+================================================================
+  2d79:0003  bus 0 addr 1
+  Manufacturer  : 深圳乐得瑞
+  Product       : LDR2001
+  SerialNumber  : 2020-12-22
+================================================================
+
+  Interface 0 alt 0
+    class    0x11  (other)
+    subclass 0x00
+    protocol 0x00
+    >>> fastboot signature (FF/42/03): NO MATCH - use pyusb fallback
+
+  Interface 1 alt 0
+    class    0x02  (CDC-comm)
+    subclass 0x02
+    protocol 0x01
+    >>> fastboot signature (FF/42/03): NO MATCH - use pyusb fallback
+    ep 0x81 IN  interrupt maxpkt 8
+
+  Interface 2 alt 0
+    class    0x0a  (CDC-data)
+    subclass 0x00
+    protocol 0x00
+    >>> fastboot signature (FF/42/03): NO MATCH - use pyusb fallback
+    ep 0x02 OUT bulk      maxpkt 64
+    ep 0x82 IN  bulk      maxpkt 64

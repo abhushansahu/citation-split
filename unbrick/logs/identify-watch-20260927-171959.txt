@@ -1,0 +1,1 @@
+Looking for MediaTek devices (VID 0x0E8D)...  [watching - Ctrl-C to stop]
