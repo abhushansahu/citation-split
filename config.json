@@ -21,14 +21,14 @@
     }
   },
   "_help": "Each output has its own band. Overlap is allowed (here 1.2-3.5 kHz gets both). lowpass/highpass_order: 1=gentle 6 dB/oct, 2=12, 4=24. gain_db trims the whole output. eq: peaking bands, e.g. {\"f\": 2500, \"gain_db\": -3, \"q\": 1.5}. Edit, then ./tune.sh to apply live.",
-  "total_latency_ms": 400,
+  "total_latency_ms": 600,
   "_help_latency": "total_latency_ms: fixed app-to-ear latency the split enforces on BOTH paths, and the value the Citation Split device reports to apps so video players hold the picture back to match. Rebuild+reinstall the driver if you change it. Must exceed the worst Bluetooth latency plus ~100 ms.",
   "idle_after_s": 120,
   "volumes": {
     "bt": 85,
     "mac": 100
   },
-  "sync_on_activate": "auto",
+  "sync_on_activate": true,
   "sync_max_age_h": 6,
-  "_help_sync": "sync_on_activate: \"auto\" = play the quiet sync chirps (uses the Mac mic for ~2 s) only if the last measurement is older than sync_max_age_h; true = every activation; false = never (only ./resync.sh). The Citation Split input is a virtual device, not the microphone, despite macOS filing it under Microphone permission."
+  "_help_sync": "sync_on_activate: true (default) = measure with two quiet chirps on every activation, because Bluetooth latency changes each time its stream opens (seen: 157 vs 223 ms minutes apart); \"auto\" = only if the last measurement is older than sync_max_age_h (risks being tens of ms off); false = never, only ./resync.sh. The Citation Split input is a virtual device, not the microphone."
 }

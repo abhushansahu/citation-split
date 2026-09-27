@@ -29,11 +29,10 @@ for trial in range(3):
     with sd.OutputStream(device=OUT,samplerate=SR,channels=2,blocksize=512,callback=cb,dtype="float32") as s:
         while s.active: time.sleep(0.05)
     sd.wait(); x=rec[:,0]; tl,th=heard(x,C_LO,[250,1800]),heard(x,C_HI,[3500,10000])
-    if tl is None or th is None or pos["claim"] is None: print(f"trial {trial+1}: chirp not heard (is the service active? volumes up?)"); continue
-    gb,gm=(t0+tl-pos["claim"])*1000,(t0+th-pos["claim"])*1000; rows.append((gb,gm))
-    print(f"trial {trial+1}: vs the device's promise, bluetooth {gb:+5.0f} ms, macbook {gm:+5.0f} ms   (+ = late, - = early)")
+    if th is None or pos["claim"] is None: print(f"trial {trial+1}: chirp not heard (is the service active? volumes up?)"); continue
+    gm=(t0+th-pos["claim"])*1000; rows.append(gm)
+    print(f"trial {trial+1}: audio vs the device's promise: {gm:+5.0f} ms   (+ = late, - = early; measured on the MacBook path, the two speakers' mutual alignment is in the service log)")
     time.sleep(0.4)
 if rows:
-    gb,gm=np.median([r[0] for r in rows]),np.median([r[1] for r in rows])
-    print(f"RESULT: bluetooth {gb:+.0f} ms, macbook {gm:+.0f} ms, speakers {abs(gb-gm):.0f} ms apart ->",
-          "lip sync OK" if abs(gb)<25 and abs(gm)<25 and abs(gb-gm)<15 else "off; ./resync.sh, or raise total_latency_ms + rebuild if consistently late")
+    gm=np.median(rows)
+    print(f"RESULT: audio {gm:+.0f} ms vs promise ->", "lip sync OK" if abs(gm)<25 else ("LATE: raise total_latency_ms, ./build-driver.sh, sudo ./install-driver.sh" if gm>0 else "early: ./resync.sh"))

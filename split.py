@@ -129,8 +129,10 @@ class Ring:
             out = np.stack([np.interp(pos, np.arange(need), src[:, c]) for c in range(self.ch)], axis=1).astype(np.float32)
             self.r += k * ratio; self.corr += k * (ratio - 1.0)
             return out
-    def reset(self):
+    def reset(self, target=None):
+        """Fresh start: fill to a base target (drops any pad / sync shift from a previous activation)."""
         with self.lock:
+            if target is not None: self.target = int(target)
             self.buf[:] = 0; self.w = self.target; self.r = 0.0; self.err_s = 0.0
     def shift(self, delta):
         """Change this output's delay by delta samples: +delta = later (re-read), -delta = skip ahead."""
@@ -231,8 +233,10 @@ def measure_offset(nb=2, gap=0.6):
     for m in o_hi:
         c = [b for b in o_lo if abs(b - m) < 0.5]
         if c: d.append(min(c, key=lambda b: abs(b - m)) - m)
+    d = [v for v in d if np.isfinite(v)]
     if not d: return None, 0
     med = float(np.median(d)); inl = [v for v in d if abs(v - med) < 0.02]
+    if not inl or not np.isfinite(np.median(inl)): return None, 0
     return float(np.median(inl)), len(inl)
 
 def measure_claim_gap(n=3):
@@ -262,25 +266,30 @@ def measure_claim_gap(n=3):
     med = float(np.median(gaps)); inl = [g for g in gaps if abs(g - med) < 0.02]
     return float(np.median(inl)) if len(inl) >= 2 else None
 
-padded = False
+applied_pad = 0.0
 def enforce_total(tag):
-    """Once per activation: pad both paths so audio lands exactly when the virtual device tells apps it will."""
-    global padded
-    if padded or not CFG.get("total_latency_ms"): return
-    pad = LAT.get("total_pad_ms")
-    if pad is None or tag == "resync":
+    """Keep app-to-ear equal to the device's promise. The mic measurement gives the pad needed at one
+    sync delay; if a later sync moves the delay by dD (both paths shift together), the pad needed is
+    smaller by dD. So: measure once, then derive; re-measure on resync."""
+    global applied_pad
+    if not CFG.get("total_latency_ms"): return
+    if "total_pad_ms" not in LAT or "pad_at_delay_ms" not in LAT or tag == "resync":
         g = measure_claim_gap()
         if g is None:
-            print(f"[{tag}] could not measure app-to-ear gap (chirp not heard); {'using stored pad' if pad is not None else 'no padding applied'}", flush=True)
+            print(f"[{tag}] could not measure app-to-ear gap (chirp not heard)", flush=True)
+            if "total_pad_ms" not in LAT: return
         else:
-            pad = g * 1000; LAT["total_pad_ms"] = round(pad, 1)
+            LAT["total_pad_ms"] = round(g * 1000 + applied_pad, 1); LAT["pad_at_delay_ms"] = round(current_delay_ms(), 1)
             json.dump(LAT, open(LATF, "w"), indent=2)
-            print(f"[{tag}] measured: audio plays {pad:+.0f} ms early vs the device's promise; saved as total_pad_ms", flush=True)
-    if pad is None: return
-    if pad < 0:
-        print(f"[{tag}] WARNING: audio already {-pad:.0f} ms LATE vs the device's promise; raise total_latency_ms, rebuild and reinstall the driver", flush=True); return
-    ring_bt.shift(pad / 1000 * SR); ring_mac.shift(pad / 1000 * SR); padded = True
-    print(f"[{tag}] padded both paths by {pad:.0f} ms so audio lands when apps expect it", flush=True)
+            print(f"[{tag}] measured: pad {LAT['total_pad_ms']:.0f} ms needed at delay {LAT['pad_at_delay_ms']:.0f} ms", flush=True)
+    want = LAT["total_pad_ms"] - (current_delay_ms() - LAT["pad_at_delay_ms"])
+    if want < 0:
+        print(f"[{tag}] WARNING: Bluetooth is {-want:.0f} ms slower than total_latency_ms allows; audio will be late vs video. Raise total_latency_ms in config.json, ./build-driver.sh, sudo ./install-driver.sh", flush=True)
+        want = 0.0
+    delta = want - applied_pad
+    if abs(delta) >= 2:
+        ring_bt.shift(delta / 1000 * SR); ring_mac.shift(delta / 1000 * SR); applied_pad = want
+        print(f"[{tag}] pad now {want:.0f} ms (both paths) so audio lands when apps expect it", flush=True)
 
 def settled(timeout=45):
     """Wait until both buffer servos are near target, so a measurement is not taken on a transient."""
@@ -296,17 +305,21 @@ def sync(tag="sync"):
     if not settled(): print(f"[{tag}] buffers not settled after 45 s; measuring anyway", flush=True)
     muted = True; time.sleep(0.2)
     ok = False
-    for rnd in range(5):
-        off, n = measure_offset()
-        if off is not None and abs(off) > 0.008 and rnd == 4: pass
-        if off is None:
-            print(f"[{tag}] round {rnd+1}: chirps not detected; Mac within ~1 m of the speaker? volumes up? (beep_level in config.json raises them)", flush=True); continue
-        # the servos will still remove their current smoothed fill errors, so correct for where the paths will REST
-        off = off - (ring_bt.err_s - ring_mac.err_s) / SR
-        print(f"[{tag}] round {rnd+1}: bluetooth {off*1000:+.0f} ms vs MacBook (at rest) at delay {current_delay_ms():.0f} ms ({n} beeps)", flush=True)
-        if abs(off) <= 0.008: ok = True; break
-        ring_mac.shift(off * SR)      # BT late -> more Mac delay; BT early -> less
-    muted = False
+    try:
+        for rnd in range(5):
+            off, n = measure_offset()
+            if off is None or not np.isfinite(off):
+                print(f"[{tag}] round {rnd+1}: chirps not detected; Mac within ~1 m of the speaker? volumes up? (beep_level in config.json raises them)", flush=True); continue
+            # the servos will still remove their current smoothed fill errors, so correct for where the paths will REST
+            off = off - (ring_bt.err_s - ring_mac.err_s) / SR
+            if not np.isfinite(off): continue
+            print(f"[{tag}] round {rnd+1}: bluetooth {off*1000:+.0f} ms vs MacBook (at rest) at delay {current_delay_ms():.0f} ms ({n} beeps)", flush=True)
+            if abs(off) <= 0.008: ok = True; break
+            ring_mac.shift(off * SR)      # BT late -> more Mac delay; BT early -> less
+    except Exception as e:
+        print(f"[{tag}] error during measurement: {e!r}", flush=True)
+    finally:
+        muted = False    # never leave program audio muted, whatever happened
     if ok:
         LAT["delay_ms"] = round(current_delay_ms(), 1); LAT["measured"] = time.strftime("%Y-%m-%d %H:%M"); json.dump(LAT, open(LATF, "w"), indent=2)
         print(f"[{tag}] locked: MacBook delayed {current_delay_ms():.0f} ms (saved as next start value)", flush=True)
@@ -319,8 +332,9 @@ def sync(tag="sync"):
 out_streams = []; mac_lat = 0.0; in_lat = 0.0; in_name = a.input or CFG["input_device"]
 def open_outputs():
     global out_streams, mac_lat, active
-    global padded
-    padded = False; ring_bt.reset(); ring_mac.reset()
+    global applied_pad
+    applied_pad = 0.0
+    ring_bt.reset(safety); ring_mac.reset(int(LAT.get("delay_ms", a.delay_ms) / 1000 * SR) + safety)
     bt = open_bt(); mac = sd.OutputStream(device=mac_i, samplerate=SR, channels=2, dtype="float32", blocksize=BLOCK, callback=mac_cb)
     mac_lat = mac.latency; bt.start(); mac.start(); out_streams = [bt, mac]; active = True
     print(f"[active] reported stream latency: bluetooth {bt.latency*1000:.0f} ms, macbook {mac.latency*1000:.0f} ms (difference {(bt.latency-mac.latency)*1000:.0f} ms)", flush=True)
@@ -415,7 +429,7 @@ try:
             if now - last_stat > 30:
                 last_stat = now
                 print(f"[{int(now-t_active):5d}s] bt fill {ring_bt.fill/SR*1000:4.0f} ms mac fill {ring_mac.fill/SR*1000:4.0f} ms under bt={ring_bt.under} mac={ring_mac.under} "
-                      f"ratio bt={getattr(ring_bt,'ratio',1):.5f} mac={getattr(ring_mac,'ratio',1):.5f} pad {LAT.get('total_pad_ms','-')} ms", flush=True)
+                      f"ratio bt={getattr(ring_bt,'ratio',1):.5f} mac={getattr(ring_mac,'ratio',1):.5f} pad {applied_pad:.0f} ms", flush=True)
             if any(not st.active for st in out_streams):
                 close_outputs(); print("[idle] an output stream stopped (device gone?); will reopen when audio continues", flush=True)
 except KeyboardInterrupt:

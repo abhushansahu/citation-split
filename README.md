@@ -53,9 +53,12 @@ sound menu.
 ### When the microphone is actually used
 
 Only during a sync measurement: about 2 s of the Mac mic while the quiet
-chirps play. With `sync_on_activate: "auto"` (default) that happens only
-when the last measurement is older than `sync_max_age_h` (6 h); otherwise
-activation applies the stored values silently. `true` = every activation,
+chirps play. That happens on every activation by default, because the
+Bluetooth latency changes each time its stream is opened (157 vs 223 ms were
+seen minutes apart), so a stored value can be tens of ms off. `"auto"` uses
+the stored value when the last measurement is younger than `sync_max_age_h`;
+
+
 `false` = only on `./resync.sh`. The always-open "Citation Split" input is a
 virtual device, not the microphone; macOS just files it under the same
 permission. For video calls, pick the MacBook speakers (or a headset) as the
@@ -74,7 +77,7 @@ Security > Microphone > enable Citation Split, then `./service.sh restart`.
 ### Why "Citation Split" instead of plain BlackHole
 
 The device is BlackHole with one line changed: it *reports* a presentation
-latency of `total_latency_ms` (400 ms) to CoreAudio while adding none itself.
+latency of `total_latency_ms` (600 ms) to CoreAudio while adding none itself.
 Video apps that honor device latency (Safari, Chrome, TV, QuickTime, IINA)
 hold the picture back by that much. On first activation the service plays a
 soft chirp *into* the device the way an app would, compares when the device
@@ -197,6 +200,15 @@ latency.json  measured delay
   than the speaker. Lower it: `./vol.sh 65 40`.
 - **Choppy on the speaker only:** Bluetooth link. Move the Mac closer, or off
   a crowded 2.4 GHz channel.
+
+## Sizing `total_latency_ms`
+
+The promise must exceed the slowest Bluetooth session plus the split's own
+buffers (about 200 ms of overhead). Bluetooth on this speaker has measured
+130 to 240 ms, so 400 ran out; 600 leaves headroom. If the log says
+`WARNING: Bluetooth is N ms slower than total_latency_ms allows`, raise it,
+`./build-driver.sh`, `sudo ./install-driver.sh`. Bigger only means video apps
+hold the picture back longer before starting; playback itself is unaffected.
 
 ## Known limits
 
