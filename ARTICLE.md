@@ -1,6 +1,6 @@
 # Salvaging a "dead" Harman Kardon Citation 200
 
-*How a speaker that seemed bricked turned out to have one dead part, and how a
+*How a speaker that spent a month in a boot loop came back with one dead part, and how a
 laptop, a microphone and a few hundred lines of Python turned it back into
 something worth listening to. Everything described here is in this repo.*
 
@@ -19,15 +19,28 @@ for this board and an erase is unrecoverable. Then we spent an evening holding
 button combinations. The speaker never once showed up on the USB bus. Its USB-C
 port, it turns out, is charge-only from the SoC's point of view.
 
-## It was never bricked
+## It got itself out of it
 
-The next day the speaker came up on its own, on Wi-Fi and Bluetooth, fully
-functional. The "chime then die" was a deeply flat battery, not firmware. And
-the four ominous orange lights we had taken for a bootloader mode? The manual
-says: amber means the microphone mute slider is on. Lesson one: read the
-manual's LED table before reading Reddit.
+Then, after more than a month of this, the speaker came up on its own: Wi-Fi,
+Bluetooth, Cast, all working. We cannot claim credit, and we cannot fully
+explain it either. Weeks of factory resets and button combinations had done
+nothing. What was different in the end was that the speaker had been left with
+its battery disconnected for an extended stretch before being plugged in
+again, and the Google Home setup was redone from an Android phone instead of
+an iPhone. Whether the long power-down cleared some stuck flag or state, or
+whether the boot loop simply gave up, we do not know. If your unit is in the
+same loop and nothing else works, a long, complete disconnection is cheap to
+try and is what preceded recovery here.
 
-But it sounded terrible. "Very bass boosted, nowhere near how it used to."
+Two things we did get wrong along the way are worth passing on. The four
+ominous orange lights we had read as a bootloader mode were nothing of the
+sort: the manual's LED table says amber means the microphone mute slider is
+on. And "chime then die" is exactly what a deeply flat battery looks like,
+which is not something the fastboot theory predicted. Read the manual's LED
+table before reading Reddit.
+
+Back in the land of the living, though, it sounded terrible. "Very bass
+boosted, nowhere near how it used to."
 
 ## Measuring instead of guessing
 
