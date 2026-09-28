@@ -68,6 +68,18 @@ def peaking(f, g, q):
     b = [1 + al * A, -2 * np.cos(w), 1 - al * A]; a_ = [1 + al / A, -2 * np.cos(w), 1 - al / A]
     return np.array([[b[0] / a_[0], b[1] / a_[0], b[2] / a_[0], 1, a_[1] / a_[0], a_[2] / a_[0]]])
 
+class Limiter:
+    """Per-output peak limiter: instant attack, ~150 ms release. Lets gain_db go above 0 without hard clipping."""
+    def __init__(self, ceiling=0.97):
+        self.ceil = ceiling; self.g = 1.0; self.rel = np.exp(-BLOCK / (0.15 * SR))
+    def __call__(self, y):
+        peak = float(np.max(np.abs(y))) if y.size else 0.0
+        need = self.ceil / peak if peak > self.ceil else 1.0
+        if need < self.g: self.g = need                      # attack now
+        else: self.g = need + (self.g - need) * self.rel     # release toward what this block allows
+        if self.g < 0.999: y = y * self.g
+        return np.clip(y, -1.0, 1.0)
+
 class Chain:
     def __init__(self, spec, ch):
         parts = []
@@ -76,10 +88,10 @@ class Chain:
         for e in spec.get("eq", []): parts.append(peaking(e["f"], e["gain_db"], e.get("q", 1.0)))
         self.sos = np.vstack(parts) if parts else np.array([[1, 0, 0, 1, 0, 0]], float)
         self.z = np.stack([sosfilt_zi(self.sos)] * ch, axis=-1) * 0
-        self.g = 10 ** (spec.get("gain_db", 0) / 20)
+        self.g = 10 ** (spec.get("gain_db", 0) / 20); self.lim = Limiter(spec.get("ceiling", 0.97))
     def __call__(self, x):
         y, self.z = sosfilt(self.sos, x, axis=0, zi=self.z)
-        return y * self.g
+        return self.lim(y * self.g)
 
 def build_chains():
     o = CFG.get("outputs", {})

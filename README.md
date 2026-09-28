@@ -121,7 +121,10 @@ Loudness comes from the two physical outputs: `vol.sh N M` sets them now
 and stores them under `volumes` in `config.json`, which the service
 re-applies every time it activates (via `app/setvol`, a small CoreAudio tool
 that sets a device's volume without switching the default output). Each
-output's `gain_db` adds gain before that. Raising
+output's `gain_db` adds gain before that, and may go above 0: a per-output
+peak limiter (ceiling 0.97) prevents clipping, so +3 to +6 dB is safe; beyond
+that loud passages get audibly squashed. Note each device only carries part
+of the spectrum, so neither will match its own full-range loudness. Raising
 `gain_db` above 0 adds gain before the devices; go up in 2 dB steps and
 back off if either output distorts.
 
@@ -134,7 +137,8 @@ overlap. Edit, then `./tune.sh` applies it live.
 |---|---|
 | `lowpass_hz`, `lowpass_order` | citation's upper edge and slope (order 1 = 6 dB/oct, 2 = 12, 4 = 24) |
 | `highpass_hz`, `highpass_order` | macbook's lower edge and slope |
-| `gain_db` | level trim for that output |
+| `gain_db` | level trim for that output, above 0 allowed (limited, not clipped) |
+| `ceiling` | limiter ceiling, default 0.97 |
 | `eq` | list of peaking bands `{"f", "gain_db", "q"}` for that output |
 
 Starting point: citation low-pass 3.5 kHz order 2, macbook high-pass 1.2 kHz
