@@ -141,6 +141,13 @@ overlap. Edit, then `./tune.sh` applies it live.
 | `ceiling` | limiter ceiling, default 0.97 |
 | `eq` | list of peaking bands `{"f", "gain_db", "q"}` for that output |
 
+`./venv/bin/python autoeq.py` plays 8 s of quiet pink noise through the
+split, measures third-octave levels at the laptop mic (close to where you
+sit), and writes corrective peaking bands toward a gentle target (small bass
+lift, slight downward tilt). `--dry-run` shows the table, `--reset` clears
+all EQ. The laptop mic is not a measurement mic, so treat the result as a
+starting point and trim by ear.
+
 Starting point: citation low-pass 3.5 kHz order 2, macbook high-pass 1.2 kHz
 order 2, macbook -2 dB. Two presets worth trying by ear (edit, `./tune.sh`):
 
@@ -190,6 +197,7 @@ split.py      the crossover / delay engine, with in-session sync
 calibrate.py  runs split.py --calibrate-only
 verify_live.py end-to-end check of the running split via the system player
 verify_total.py app-to-ear timing vs the device's promise (lip-sync check)
+autoeq.py     measured room/seat EQ correction via the laptop mic
 config.json   devices and tuning
 latency.json  measured delay
 ```

@@ -11,13 +11,35 @@
       "lowpass_hz": 3500,
       "lowpass_order": 2,
       "gain_db": 3,
-      "eq": []
+      "eq": [
+        {
+          "f": 199,
+          "gain_db": -5.2,
+          "q": 0.5
+        },
+        {
+          "f": 1414,
+          "gain_db": 2.0,
+          "q": 1.06
+        }
+      ]
     },
     "macbook": {
       "highpass_hz": 1200,
       "highpass_order": 2,
       "gain_db": 0,
-      "eq": []
+      "eq": [
+        {
+          "f": 2806,
+          "gain_db": -1.5,
+          "q": 2.12
+        },
+        {
+          "f": 7906,
+          "gain_db": 4.3,
+          "q": 0.85
+        }
+      ]
     }
   },
   "_help": "Each output has its own band. Overlap is allowed (here 1.2-3.5 kHz gets both). lowpass/highpass_order: 1=gentle 6 dB/oct, 2=12, 4=24. gain_db trims the whole output; may go above 0 (a peak limiter with ceiling 0.97 prevents clipping, so +3..+6 dB is safe, beyond that it starts to squash loud passages). eq: peaking bands, e.g. {\"f\": 2500, \"gain_db\": -3, \"q\": 1.5}. Edit, then ./tune.sh to apply live.",
