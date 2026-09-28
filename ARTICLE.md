@@ -109,13 +109,26 @@ re-checks itself 40 seconds after locking.
 **Lip sync needs the device to tell the truth.** For music the delay is
 invisible. For video, apps hold the picture back by whatever latency the
 output device reports, and a virtual device reports zero. So we forked
-BlackHole, changed one line so it reports a fixed 400 ms, and made the split
-pad both paths so audio really does land 400 ms after the app hands it over.
+BlackHole, changed one line so it reports a fixed latency (600 ms, sized to
+exceed the slowest Bluetooth session plus the split's own buffers), and made
+the split measure and pad both paths so audio really lands when the device
+said it would.
 Chrome, Safari and Apple's players then lip-sync on their own. The build
 needs only Command Line Tools, not Xcode. Two gotchas: CoreAudio only loads
 new drivers when its daemon restarts, and logging out does not restart it;
 and the option BlackHole documents for latency also *adds* that delay inside
 the driver, which is not what you want.
+
+**Stored timing does not survive.** We tried applying the last measured
+Bluetooth delay silently on wake-up, to spare the chirps. Minutes apart, the
+same speaker measured 157 and then 223 ms. Bluetooth latency belongs to the
+stream, not the device, so every activation measures. The chirps are quiet.
+
+**State that leaks between activations.** Each wake-up kept the previous
+padding and sync shifts baked into the buffer targets and then applied them
+again, so both speakers crept later together while staying perfectly aligned
+with each other. It looked like a sudden loss of lip sync. Reset everything
+to base values on every activation; measure from there.
 
 **launchd and the microphone.** Running the split as a background service, it
 received pure silence from the virtual device. macOS treats reading any audio
@@ -132,12 +145,15 @@ now play at a quarter of the level and the sweep is 6 seconds.
 ## What it is now
 
 Pick "Citation Split" in the sound menu and play anything. A background
-service wakes up, sets the volumes, applies stored timing, and goes idle two
-minutes after the music stops. Every two hours or so, or on request, it plays
-two soft chirps and re-measures. Verified with the mic: the two speakers land
-within a few milliseconds of each other and within a few milliseconds of what
-the virtual device promises apps. Each output has its own configurable band,
-gain and EQ, applied live.
+service wakes up, sets the volumes, plays two soft chirps to measure the
+Bluetooth delay and the app-to-ear timing, and goes idle two minutes after
+the music stops. Verified with the mic: the two speakers land within a few
+milliseconds of each other and of what the virtual device promises apps.
+Each output has its own configurable band, gain, a peak limiter so gain can
+go above unity without clipping, and EQ, all applied live. A small tool plays
+quiet pink noise and measures the result at the laptop mic, which is roughly
+where the listener sits; it found the seat 12 dB bass-heavy and dull on top,
+and wrote the correction.
 
 It is not a repaired speaker. Treble comes from the laptop and bass from
 across the room, and Bluetooth compression sits in the middle. But it is a
