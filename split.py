@@ -345,6 +345,12 @@ def measure_offset_passive(secs=None, maxlag_s=1.5):
     band_lo, band_hi = _ana_bands()
     mic_i = find(CFG.get("mic_device", "MacBook Pro Microphone"), "input")
     nm = int(secs * SR); L = int(maxlag_s * SR)
+    # The correlation needs maxlag_s of tap history from *before* the recording
+    # starts, so just after activation there is nothing to correlate against yet.
+    t0 = time.time()
+    while tap_w < L + BLOCK:
+        if time.time() - t0 > maxlag_s + 3: return None, 0.0, 0.0
+        time.sleep(0.1)
     rec = sd.rec(nm, samplerate=SR, channels=1, device=mic_i, dtype="float32")
     sd.wait()
     ref_lo, ref_hi, _ = tap_read(nm + L)      # taken after the recording, so it covers it
