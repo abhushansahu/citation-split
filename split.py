@@ -199,6 +199,7 @@ def bt_cb(outdata, frames, t, status):
 
 def open_bt():
     global bt_sr
+    bt_index()
     for sr in (SR, bt_sr):
         try:
             s = sd.OutputStream(device=bt_index(), samplerate=sr, channels=2, dtype="float32", blocksize=BLOCK, callback=bt_cb)
@@ -341,21 +342,39 @@ def sync(tag="sync"):
     return ok
 
 # --- run -------------------------------------------------------------------
-out_streams = []; mac_lat = 0.0; in_lat = 0.0; in_name = a.input or CFG["input_device"]
+out_streams = []; mac_lat = 0.0; in_lat = 0.0; in_name = a.input or CFG["input_device"]; T_START = time.time()
+import subprocess
+def bt_connected():
+    """Is the speaker present as a CoreAudio output? (A2DP connected <=> device exists). Needs no Bluetooth permission."""
+    r = subprocess.run(["/opt/homebrew/bin/SwitchAudioSource", "-a", "-t", "output"], capture_output=True, text=True)
+    return CFG["bt_device"] in r.stdout.splitlines()
+
+def bt_connect():
+    addr = CFG.get("bt_address")
+    if not addr: return False
+    try:
+        r = subprocess.run(["/opt/homebrew/bin/blueutil", "--connect", addr], capture_output=True, text=True, timeout=20)
+        if r.returncode != 0: print(f"[bt] connect attempt failed: {r.stderr.strip()[:160]}", flush=True)
+    except subprocess.TimeoutExpired:
+        print("[bt] connect attempt timed out", flush=True)
+    for _ in range(10):
+        time.sleep(0.5)
+        if bt_connected(): return True
+    return False
+
+mac_only = False
 def open_outputs():
-    global out_streams, mac_lat, active
-    global applied_pad
+    global out_streams, mac_lat, active, applied_pad
     applied_pad = 0.0
     ring_bt.reset(safety); ring_mac.reset(int(LAT.get("delay_ms", a.delay_ms) / 1000 * SR) + safety)
     bt = open_bt(); mac = sd.OutputStream(device=mac_i, samplerate=SR, channels=2, dtype="float32", blocksize=BLOCK, callback=mac_cb)
-    mac_lat = mac.latency; bt.start(); mac.start(); out_streams = [bt, mac]; active = True
-    print(f"[active] reported stream latency: bluetooth {bt.latency*1000:.0f} ms, macbook {mac.latency*1000:.0f} ms (difference {(bt.latency-mac.latency)*1000:.0f} ms)", flush=True)
+    mac_lat = mac.latency
+    print(f"[active] reported stream latency: bluetooth {bt.latency*1000:.0f} ms, macbook {mac.latency*1000:.0f} ms", flush=True)
     v = CFG.get("volumes")
     if v:
-        import subprocess
         for dev, key in ((CFG["bt_device"], "bt"), (CFG["mac_device"], "mac")):
             subprocess.run([os.path.join(HERE, "app", "setvol"), dev, str(v[key])], capture_output=True)
-        print(f"[active] volumes set: {CFG['bt_device']} {v['bt']} %, {CFG['mac_device']} {v['mac']} %", flush=True)
+    bt.start(); mac.start(); out_streams = [bt, mac]; active = True
 def close_outputs():
     global out_streams, active
     active = False
@@ -396,23 +415,60 @@ if a.file or a.calibrate_only:
 in_name = a.input or CFG["input_device"]
 # ---- live / service mode: input always open; outputs only while audio plays ----
 IDLE_AFTER = CFG.get("idle_after_s", 20)
+in_name = a.input or CFG["input_device"]
 in_stream = None
-while in_stream is None:
-    try:
-        in_stream = sd.InputStream(device=find(in_name, "input"), samplerate=SR, channels=2, dtype="float32", blocksize=BLOCK, callback=in_cb)
-    except LookupError as e:
-        print(f"waiting: {e} (is the driver installed?)", flush=True); time.sleep(10)
-in_stream.start(); in_lat = in_stream.latency
-time.sleep(2.0); print(f"input check: rms {level['rms']:.5f} after 2 s (0.00000 under launchd usually means no Microphone permission for the service)", flush=True)
+def open_input():
+    global in_stream, in_lat
+    while in_stream is None:
+        try:
+            in_stream = sd.InputStream(device=find(in_name, "input"), samplerate=SR, channels=2, dtype="float32", blocksize=BLOCK, callback=in_cb)
+        except LookupError as e:
+            print(f"waiting: {e} (is the driver installed?)", flush=True); time.sleep(10)
+    in_stream.start(); in_lat = in_stream.latency
+def reenumerate():
+    """PortAudio's device table is frozen at init; a reconnected Bluetooth device has a new identity. Rebuild it (idle only)."""
+    global in_stream, mac_i
+    try: in_stream.stop(); in_stream.close()
+    except Exception: pass
+    in_stream = None; sd._terminate(); sd._initialize(); mac_i = find(CFG["mac_device"], "output"); open_input()
+def current_output():
+    return subprocess.run(["/opt/homebrew/bin/SwitchAudioSource", "-c", "-t", "output"], capture_output=True, text=True).stdout.strip()
+def set_output(name):
+    subprocess.run(["/opt/homebrew/bin/SwitchAudioSource", "-s", name, "-t", "output"], capture_output=True)
+open_input()
 signal.signal(signal.SIGUSR2, reload_config)
 signal.signal(signal.SIGUSR1, lambda *_: active and threading.Thread(target=sync, args=("resync",), daemon=True).start())
 print(f"split service: input '{in_name}' -> {CFG['bt_device']} {spec_bt} | {CFG['mac_device']} {spec_mac}. Idle until audio arrives.", flush=True)
 warned = 0.0; t_active = 0.0; last_stat = 0.0; recheck_done = True
+speaker_present = bt_connected(); auto_switched = False; last_present_check = 0.0; last_connect_try = 0.0
 try:
     while True:
         time.sleep(0.25); now = time.time()
+        # --- speaker presence: follow it with the system output ---------------------------------
+        if now - last_present_check > 2:
+            last_present_check = now; present = bt_connected()
+            if present != speaker_present:
+                speaker_present = present
+                if not present:
+                    if active: close_outputs()
+                    if current_output() == in_name:
+                        set_output(CFG["mac_device"]); auto_switched = True
+                        print(f"[bt] speaker gone; system output -> {CFG['mac_device']}", flush=True)
+                    else: print("[bt] speaker gone", flush=True)
+                else:
+                    if not active: reenumerate()
+                    if auto_switched:
+                        set_output(in_name); auto_switched = False
+                        print(f"[bt] speaker back; system output -> {in_name}", flush=True)
+                    else: print("[bt] speaker back", flush=True)
+            elif not present:
+                if current_output() == in_name:      # user picked the split while the speaker is away
+                    set_output(CFG["mac_device"]); auto_switched = True
+                    print(f"[bt] speaker not connected; system output -> {CFG['mac_device']} until it is", flush=True)
+                if auto_switched and now - last_connect_try > 60:
+                    last_connect_try = now; bt_connect()   # harmless if the speaker is off
         playing = now - level["last_audio"] < IDLE_AFTER
-        if not active and playing:
+        if not active and playing and speaker_present:
             try:
                 open_outputs()
             except Exception as e:
@@ -420,7 +476,7 @@ try:
                 time.sleep(5); continue
             print(f"[active] audio detected; outputs open, delay {current_delay_ms():.0f} ms", flush=True)
             time.sleep(1.0)
-            mode = CFG.get("sync_on_activate", "auto"); age_h = None
+            mode = CFG.get("sync_on_activate", True); age_h = None
             try: age_h = (time.time() - time.mktime(time.strptime(LAT.get("measured", ""), "%Y-%m-%d %H:%M"))) / 3600
             except Exception: pass
             want = (mode is True) or (mode == "auto" and (age_h is None or age_h > CFG.get("sync_max_age_h", 6) or "total_pad_ms" not in LAT))
@@ -429,7 +485,7 @@ try:
                 sync("startup"); recheck_done = False
             else:
                 enforce_total("stored"); recheck_done = True
-                print(f"[active] using stored sync (measured {age_h:.1f} h ago, delay {current_delay_ms():.0f} ms); no microphone used. ./resync.sh re-measures.", flush=True)
+                print(f"[active] using stored sync (delay {current_delay_ms():.0f} ms); ./resync.sh re-measures.", flush=True)
             t_active = now
         elif not active and now - last_stat > 60:
             last_stat = now; print(f"[idle] input rms {level['rms']:.5f} ({'silence' if level['rms'] < 1e-4 else 'audio present'})", flush=True)
@@ -443,7 +499,7 @@ try:
                 print(f"[{int(now-t_active):5d}s] bt fill {ring_bt.fill/SR*1000:4.0f} ms mac fill {ring_mac.fill/SR*1000:4.0f} ms under bt={ring_bt.under} mac={ring_mac.under} "
                       f"ratio bt={getattr(ring_bt,'ratio',1):.5f} mac={getattr(ring_mac,'ratio',1):.5f} pad {applied_pad:.0f} ms", flush=True)
             if any(not st.active for st in out_streams):
-                close_outputs(); print("[idle] an output stream stopped (device gone?); will reopen when audio continues", flush=True)
+                close_outputs(); print("[idle] an output stream stopped; will reopen when audio continues", flush=True)
 except KeyboardInterrupt:
     pass
 finally:

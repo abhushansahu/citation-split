@@ -137,6 +137,16 @@ never asked for permission. It just gets zeros. The service now runs through a
 20-line C launcher inside an app bundle that declares a microphone usage
 string, so the prompt appears once and sticks.
 
+**Bluetooth speakers come and go.** A portable speaker powers itself off,
+wanders out of range, runs flat. The first attempt at handling this was
+elaborate: keep going on the laptop alone, keep retrying the speaker. The
+owner's suggestion was simpler and better: when the speaker disappears from
+the audio device list, switch the Mac's output to its own speakers; when it
+comes back, switch back. Two seconds either way. One trap: PortAudio's
+device table is built once at startup, and a reconnected Bluetooth device
+returns with a new identity, so the table has to be rebuilt while idle. And
+macOS gates the Bluetooth API per app exactly as it gates the microphone.
+
 **Quiet tests.** The first test signals were loud pure tones and a 20-second
 sweep, appropriate for diagnosing a dead driver and painful to live with.
 Matched filtering gives about 20 dB of processing gain, so the sync chirps

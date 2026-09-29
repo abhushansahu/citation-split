@@ -50,6 +50,15 @@ opens the speaker and MacBook outputs, syncs, and releases them again after
 `idle_after_s` (120 s) of silence. So you can switch outputs freely from the
 sound menu.
 
+It also follows the speaker: if the Bluetooth speaker disconnects (switched
+off, out of range, battery flat) while "Citation Split" is the system output,
+the service switches the output to the MacBook speakers within about two
+seconds, and switches back when the speaker reappears. If you pick "Citation
+Split" while the speaker is away, it is switched back to the MacBook speakers
+immediately. "Citation Split" itself cannot be hidden from the sound menu:
+it is a driver-published device and stays listed; the auto-switch makes that
+harmless.
+
 ### When the microphone is actually used
 
 Only during a sync measurement: about 2 s of the Mac mic while the quiet
@@ -63,6 +72,13 @@ the stored value when the last measurement is younger than `sync_max_age_h`;
 virtual device, not the microphone; macOS just files it under the same
 permission. For video calls, pick the MacBook speakers (or a headset) as the
 call app's output; the service then stays idle and touches nothing.
+
+### Bluetooth permission
+
+The app bundle also declares a Bluetooth usage string, so the service can
+ask the speaker to reconnect (`blueutil --connect`) when it is away. Allow it
+if asked; presence detection itself needs no permission (it reads the audio
+device list).
 
 ### Microphone permission
 

@@ -8,5 +8,6 @@
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSUIElement</key><true/>
+  <key>NSBluetoothAlwaysUsageDescription</key><string>Citation Split reconnects the Bluetooth speaker when audio starts.</string>
   <key>NSMicrophoneUsageDescription</key><string>Citation Split listens on the Mac microphone for a moment to align the Bluetooth speaker with the MacBook speakers, and reads the Citation Split virtual audio device.</string>
 </dict></plist>
