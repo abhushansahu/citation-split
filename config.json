@@ -4,7 +4,7 @@
   "mac_device": "MacBook Pro Speakers",
   "mic_device": "MacBook Pro Microphone",
   "block": 512,
-  "beep_level": 0.08,
+  "beep_level": 0.06,
   "outputs": {
     "citation": {
       "lowpass_hz": 3500,
@@ -52,5 +52,20 @@
   "sync_on_activate": true,
   "sync_max_age_h": 6,
   "_help_sync": "sync_on_activate: true (default) = measure with two quiet chirps on every activation, because Bluetooth latency changes each time its stream opens (seen: 157 vs 223 ms minutes apart); \"auto\" = only if the last measurement is older than sync_max_age_h (risks being tens of ms off); false = never, only ./resync.sh. The Citation Split input is a virtual device, not the microphone.",
-  "_help_local": "Put machine-specific values (bt_address, and optionally device names) in config.local.json, which is git-ignored and overlaid on this file."
+  "_help_local": "Put machine-specific values (bt_address, and optionally device names) in config.local.json, which is git-ignored and overlaid on this file.",
+  "chirp_len_s": 0.25,
+  "chirp_band_lo": [
+    2600,
+    3400
+  ],
+  "chirp_band_hi": [
+    9000,
+    14000
+  ],
+  "sync_mute": "auto",
+  "sync_check_s": 120,
+  "sync_check_max_s": 900,
+  "sync_defer_rms": 0.1,
+  "_help_chirps": "The sync chirps. chirp_band_lo goes out the citation (keep it under its lowpass_hz), chirp_band_hi out the MacBook. Both sit at the top of their path because that is where they are hardest to notice; chirp_len_s is long to buy back the detection SNR that narrow bands and a low beep_level cost. Every measurement logs 'margin Nx' -- the correlation peak over the background, needing 6x. If margin runs near 6x, widen chirp_band_lo (e.g. [2000, 3400]) or raise beep_level. sync_mute: \"auto\" (default) mutes program audio for startup and ./resync.sh measurements but not for the periodic drift check, true always mutes, false never does.",
+  "_help_drift": "The Bluetooth stack's delay drifts mid-session and the ring buffers cannot see it, so the drift check is acoustic. sync_check_s: first check this long after audio starts (0 disables). If it found less than 8 ms it doubles the wait, up to sync_check_max_s; if it had to correct, it goes back to sync_check_s. A check is postponed up to 120 s while input RMS is above sync_defer_rms, so it lands in a quiet passage where the measurement is cleanest."
 }

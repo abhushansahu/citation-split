@@ -62,9 +62,10 @@ harmless.
 ### When the microphone is actually used
 
 Only during a sync measurement: about 2 s of the Mac mic while the quiet
-chirps play. That happens on every activation by default, because the
-Bluetooth latency changes each time its stream is opened (157 vs 223 ms were
-seen minutes apart), so a stored value can be tens of ms off. `"auto"` uses
+chirps play. That happens on every activation by default, and again on the
+drift check described below, because the Bluetooth latency changes each time
+its stream is opened (157 vs 223 ms were seen minutes apart) and then keeps
+drifting, so a stored value can be tens of ms off. `"auto"` uses
 the stored value when the last measurement is younger than `sync_max_age_h`;
 
 
@@ -110,13 +111,46 @@ unaffected. Change `total_latency_ms` -> rebuild -> reinstall.
 ./stop.sh           # from another terminal
 ```
 
-On every start, and again 40 s later, the split plays two quiet chirp pairs
-(a low one from the speaker, a high one from the MacBook), listens on the
-Mac mic, and shifts its delay buffer until both arrive within about 8 ms.
-Program audio is muted for the ~2 s this takes. Keep the Mac within
-a metre or so of the speaker and the room reasonably quiet for those few
-seconds. This happens inside the running process because Bluetooth latency
-can change each time the audio stream is opened.
+On every start the split plays two quiet chirp pairs (a low one from the
+speaker, a high one from the MacBook), listens on the Mac mic, and shifts its
+delay buffer until both arrive within about 8 ms. Program audio is muted for
+the ~2 s this takes; if the first round already locks, the old 40 s recheck is
+skipped. Keep the Mac within a metre or so of the speaker and the room
+reasonably quiet for those few seconds. This happens inside the running
+process because Bluetooth latency can change each time the stream is opened.
+
+Both chirps sit at the top of their own band -- `chirp_band_lo` just under the
+citation's lowpass, `chirp_band_hi` near the top of hearing -- which is where
+they are hardest to notice. Narrow bands blunt the matched filter that finds
+them, so `chirp_len_s` (250 ms) is long enough to pay that back: what matters
+for detection is `beep_level` squared times length. Every measurement logs its
+margin, the correlation peak over the background, which needs to clear 6x:
+
+```
+[auto] round 1: bluetooth +12 ms vs MacBook (at rest) at delay 176 ms (2 beeps, margin 31.4x)
+```
+
+If that margin runs near 6x, the mic is barely hearing the chirps: widen
+`chirp_band_lo` (say `[2000, 3400]`) or raise `beep_level`.
+
+### Drift, and why it is measured rather than computed
+
+The Bluetooth stack's own delay wanders mid-session -- tens of ms over
+minutes -- and nothing inside this process can see it happen. Through a
+measured +41 ms drift the speaker's ring buffer sat at 373-384 ms fill with a
+rate ratio of 1.00000 and no underruns: the servo holds the ring's *fill*, and
+the drift is downstream of the ring, inside the stack. So the only honest test
+is to listen.
+
+While audio plays, the split re-measures on its own: first 2 minutes after
+activation, then doubling the wait each time it finds nothing (up to
+`sync_check_max_s`, 15 min), and dropping straight back to 2 minutes whenever
+it has to correct by 8 ms or more. A check due during a loud passage waits for
+a quieter one, up to 120 s. Unlike the startup sync it does *not* mute program
+audio -- muting every few minutes would be far more noticeable than the chirps
+it hides -- so it mixes the chirps under the music and discards any
+measurement it cannot make confidently. Set `sync_check_s` to 0 to turn the
+whole thing off and go back to running `./resync.sh` by hand.
 
 The keyboard volume keys do nothing while the split runs, because the
 system output is the virtual device. Use `vol.sh`.
@@ -187,7 +221,9 @@ laid over `config.json` at load time.
 
 `latency.json` holds the last locked delay and is only the starting guess
 for the next session's sync. `beep_level` in `config.json` sets the sync
-chirp loudness (0 to 1, default 0.08).
+chirp loudness (0 to 1, default 0.06); `chirp_band_lo` / `chirp_band_hi` /
+`chirp_len_s` set where and how long they are, and `sync_check_s` /
+`sync_check_max_s` / `sync_defer_rms` / `sync_mute` govern the drift check.
 
 ## How it holds sync
 
@@ -227,7 +263,11 @@ latency.json  measured delay
 - **Warbling / wobbly pitch:** was a bug in the buffer servo, fixed 2026-09-28.
   Status lines every 15 s show each buffer's `ratio`; it should sit within
   0.0005 of 1.0 once settled.
-- **Smeared / doubled transients:** paths out of sync. `./resync.sh`.
+- **Smeared / doubled transients:** paths out of sync. The drift check
+  normally catches this within a couple of minutes; `./resync.sh` forces it
+  now. If it keeps coming back, check the `margin` in the log -- a margin near
+  6x means the chirps are barely being heard and corrections are being
+  discarded.
 - **Harsh or thin:** the laptop is now the tweeter and sits closer to you
   than the speaker. Lower it: `./vol.sh 65 40`.
 - **Choppy on the speaker only:** Bluetooth link. Move the Mac closer, or off

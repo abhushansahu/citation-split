@@ -7,10 +7,13 @@ the crossover with a 4th-order Linkwitz-Riley filter, and sends:
   high band (stereo) -> the MacBook speakers, delayed to match Bluetooth latency
 
 Bluetooth latency differs every time the stream is opened (tens of ms) and
-is then constant, so the delay is measured *inside* this process: on start
-it plays a short beep pair (1 kHz via Bluetooth, 8 kHz via the MacBook),
+and then drifts slowly, so the delay is measured *inside* this process: it
+plays a quiet chirp pair (near 3 kHz via Bluetooth, near 11 kHz via the
+MacBook, both at the top of their own band so they are hard to notice),
 listens on the Mac mic, and shifts its own delay buffer until both arrive
-together. Send SIGUSR1 to re-sync while running.
+together. It repeats the measurement while playing -- first after two
+minutes, then backing off as long as nothing has moved. Send SIGUSR1
+(./resync.sh) to force one.
 
 Each output device runs on its own clock; a ring buffer per output plus a
 slow servo (drop / repeat one sample per block when >10 ms off target)
@@ -214,25 +217,47 @@ def open_bt():
     raise RuntimeError(f"cannot open Bluetooth output: {last}")
 
 # --- in-session sync -------------------------------------------------------
-# Soft chirps (not loud pure tones), found by matched filtering, which gives
-# ~20 dB of processing gain, so they can be quiet. Low chirp -> Bluetooth path,
-# high chirp -> MacBook path, injected at the same instant.
-CH_LEN = 0.08
+# Soft chirps (not loud pure tones), found by matched filtering. Low chirp ->
+# Bluetooth path, high chirp -> MacBook path, injected at the same instant.
+#
+# Both bands sit at the top of their path -- the low one just under the
+# citation's lowpass, the high one near the top of hearing -- because that is
+# where a chirp is hardest to notice. Narrow bands blunt the matched filter's
+# peak, so CH_LEN pays it back: detection energy is level^2 * length, and 250 ms
+# buys back more than the narrower band and the lower level cost. Each
+# measurement logs its margin (correlation peak over background); if that runs
+# near MARGIN, widen chirp_band_lo or raise beep_level in config.json.
+CH_LEN = float(CFG.get("chirp_len_s", 0.25))
+BAND_LO = tuple(CFG.get("chirp_band_lo", [2600, 3400]))
+BAND_HI = tuple(CFG.get("chirp_band_hi", [9000, 14000]))
+MARGIN = 6.0
 def _chirp(f0, f1):
     t = np.arange(int(CH_LEN * SR)) / SR; k = np.log(f1 / f0)
     ph = 2 * np.pi * f0 * CH_LEN / k * (np.exp(k * t / CH_LEN) - 1)
     return (np.sin(ph) * np.hanning(len(t))).astype(np.float32)
-CHIRP_LO, CHIRP_HI = _chirp(300, 1500), _chirp(4000, 9000)
+CHIRP_LO, CHIRP_HI = _chirp(*BAND_LO), _chirp(*BAND_HI)
+def _search_band(b):
+    """Detection bandpass: just wider than the chirp, inside Nyquist. Every Hz of
+    slack past the chirp's own band only adds noise to the correlation."""
+    return [max(20.0, b[0] * 0.92), min(SR / 2 - 500.0, b[1] * 1.08)]
+SEARCH_LO, SEARCH_HI = _search_band(BAND_LO), _search_band(BAND_HI)
 
 def _matched_onsets(x, ref, band, n_expect):
+    """Onsets of up to n_expect copies of ref in x, each with its margin over the
+    background. A margin near MARGIN means the chirp was only just heard."""
     sos = butter(4, band, "bandpass", fs=SR, output="sos"); xb = sosfiltfilt(sos, x)
     n = len(xb) + len(ref); c = np.fft.irfft(np.fft.rfft(xb, n) * np.conj(np.fft.rfft(ref, n)), n)[: len(xb)]
-    e = np.abs(c); e = np.convolve(e, np.ones(int(0.002 * SR)) / int(0.002 * SR), "same")
+    # Smooth over about one peak width, not a fixed 2 ms: a matched filter's peak is
+    # ~1/bandwidth wide, so a window wider than that flattens the peak and not the
+    # background -- it cost the wideband high chirp ~10x of its margin.
+    k = int(max(1, min(0.002 * SR, SR / (band[1] - band[0]))))
+    e = np.abs(c); e = np.convolve(e, np.ones(k) / k, "same")
+    bg = float(np.median(e)) + 1e-20        # taken before any peak is blanked out
     out = []
     for _ in range(n_expect):
         i = int(np.argmax(e))
-        if e[i] < 6 * np.median(e): break
-        out.append(i / SR); lo, hi = max(0, i - int(0.25 * SR)), i + int(0.25 * SR); e[lo:hi] = 0
+        if e[i] < MARGIN * bg: break
+        out.append((i / SR, float(e[i]) / bg)); lo, hi = max(0, i - int(0.25 * SR)), i + int(0.25 * SR); e[lo:hi] = 0
     return sorted(out)
 
 def measure_offset(nb=2, gap=0.6):
@@ -246,17 +271,19 @@ def measure_offset(nb=2, gap=0.6):
         with inject_lock: inject.append([(lvl * CHIRP_LO)[:, None], np.column_stack([lvl * CHIRP_HI] * 2), 0])
         time.sleep(gap)
     sd.wait(); x = rec[:, 0]
-    o_lo = _matched_onsets(x, CHIRP_LO, [250, 1800], nb)
-    o_hi = _matched_onsets(x, CHIRP_HI, [3500, 10000], nb)
+    p_lo = _matched_onsets(x, CHIRP_LO, SEARCH_LO, nb)
+    p_hi = _matched_onsets(x, CHIRP_HI, SEARCH_HI, nb)
+    o_lo = [t for t, _ in p_lo]; o_hi = [t for t, _ in p_hi]
+    mg = min([v for _, v in p_lo + p_hi], default=0.0)   # weakest of the two paths
     d = []
     for m in o_hi:
         c = [b for b in o_lo if abs(b - m) < 0.5]
         if c: d.append(min(c, key=lambda b: abs(b - m)) - m)
     d = [v for v in d if np.isfinite(v)]
-    if not d: return None, 0
+    if not d: return None, 0, mg
     med = float(np.median(d)); inl = [v for v in d if abs(v - med) < 0.02]
-    if not inl or not np.isfinite(np.median(inl)): return None, 0
-    return float(np.median(inl)), len(inl)
+    if not inl or not np.isfinite(np.median(inl)): return None, 0, mg
+    return float(np.median(inl)), len(inl), mg
 
 def measure_claim_gap(n=3):
     """Play a chirp INTO the virtual device (as an app would), note when the device claims it will
@@ -278,7 +305,7 @@ def measure_claim_gap(n=3):
         with sd.OutputStream(device=out_i, samplerate=SR, channels=2, blocksize=BLOCK, dtype="float32", callback=cb) as st:
             while st.active: time.sleep(0.05)
         sd.wait(); x = rec[:, 0]
-        o = _matched_onsets(x, CHIRP_HI, [3500, 10000], 1)
+        o = [t for t, _ in _matched_onsets(x, CHIRP_HI, SEARCH_HI, 1)]
         if o and pos["claim"]: gaps.append(pos["claim"] - (t_rec + o[0]))
         time.sleep(0.3)
     if len(gaps) < 2: return None
@@ -318,27 +345,52 @@ def settled(timeout=45):
         time.sleep(0.5)
     return False
 
+# Only one measurement at a time. Two overlapping syncs inject chirps into the
+# same recording, so each one pairs the other's onsets and "measures" nonsense;
+# the log has a session where a manual resync landed on top of the startup sync
+# and drove the delay 262 -> 326 -> 161 ms chasing phantom offsets.
+sync_lock = threading.Lock()
+last_sync = {"shift_ms": 0.0, "rounds": 0, "margin": 0.0, "detected": False, "ok": False}
+
 def sync(tag="sync"):
-    global muted
     if not active: print(f"[{tag}] skipped: outputs idle", flush=True); return False
+    if not sync_lock.acquire(blocking=False):
+        print(f"[{tag}] skipped: a measurement is already running", flush=True); return False
+    try: return _sync(tag)
+    finally: sync_lock.release()
+
+def _sync(tag):
+    global muted
     if not settled(): print(f"[{tag}] buffers not settled after 45 s; measuring anyway", flush=True)
-    muted = True; time.sleep(0.2)
-    ok = False
+    # "auto" is the unattended drift check; muting program audio every few minutes
+    # would be far more noticeable than the chirps it hides. The matched filter
+    # digs them out from under the music instead, and a measurement that does not
+    # convince is discarded rather than applied.
+    mute_mode = CFG.get("sync_mute", "auto")
+    muted = (mute_mode is True) or (mute_mode == "auto" and tag != "auto")
+    time.sleep(0.2)
+    ok = False; rounds = 0; shifted = 0.0; margin = 0.0; detected = False
     try:
         for rnd in range(5):
-            off, n = measure_offset()
+            rounds = rnd + 1
+            off, n, mg = measure_offset()
+            margin = mg
             if off is None or not np.isfinite(off):
-                print(f"[{tag}] round {rnd+1}: chirps not detected; Mac within ~1 m of the speaker? volumes up? (beep_level in config.json raises them)", flush=True); continue
+                print(f"[{tag}] round {rounds}: chirps not detected (best margin {mg:.1f}x, need {MARGIN:.0f}x); "
+                      f"Mac within ~1 m of the speaker? volumes up? (beep_level / chirp_band_lo in config.json)", flush=True); continue
             # the servos will still remove their current smoothed fill errors, so correct for where the paths will REST
             off = off - (ring_bt.err_s - ring_mac.err_s) / SR
             if not np.isfinite(off): continue
-            print(f"[{tag}] round {rnd+1}: bluetooth {off*1000:+.0f} ms vs MacBook (at rest) at delay {current_delay_ms():.0f} ms ({n} beeps)", flush=True)
+            detected = True
+            print(f"[{tag}] round {rounds}: bluetooth {off*1000:+.0f} ms vs MacBook (at rest) at delay {current_delay_ms():.0f} ms ({n} beeps, margin {mg:.1f}x)", flush=True)
             if abs(off) <= 0.008: ok = True; break
             ring_mac.shift(off * SR)      # BT late -> more Mac delay; BT early -> less
+            shifted += off * 1000
     except Exception as e:
         print(f"[{tag}] error during measurement: {e!r}", flush=True)
     finally:
         muted = False    # never leave program audio muted, whatever happened
+    last_sync.update(shift_ms=shifted, rounds=rounds, margin=margin, detected=detected, ok=ok)
     if ok:
         LAT["delay_ms"] = round(current_delay_ms(), 1); LAT["measured"] = time.strftime("%Y-%m-%d %H:%M"); json.dump(LAT, open(LATF, "w"), indent=2)
         print(f"[{tag}] locked: MacBook delayed {current_delay_ms():.0f} ms (saved as next start value)", flush=True)
@@ -445,6 +497,29 @@ open_input()
 signal.signal(signal.SIGUSR2, reload_config)
 signal.signal(signal.SIGUSR1, lambda *_: active and threading.Thread(target=sync, args=("resync",), daemon=True).start())
 print(f"split service: input '{in_name}' -> {CFG['bt_device']} {spec_bt} | {CFG['mac_device']} {spec_mac}. Idle until audio arrives.", flush=True)
+# The Bluetooth stack's own delay drifts mid-session -- tens of ms over minutes --
+# and nothing we can see locally reveals it: through a +41 ms drift the bt ring
+# sat at 373-384 ms fill with ratio 1.00000 and no underruns, because the servo
+# locks the ring's fill and the drift happens downstream of it. A mic measurement
+# is the only ground truth, so the check is acoustic, and it backs off while
+# things are stable to keep it cheap.
+AUTO_FIRST = float(CFG.get("sync_check_s", 120))          # 0 disables the automatic check
+AUTO_MAX = float(CFG.get("sync_check_max_s", 900))
+AUTO_LOUD_RMS = float(CFG.get("sync_defer_rms", 0.10))
+auto_interval = AUTO_FIRST; next_auto = 0.0; auto_due = 0.0
+
+def auto_check():
+    """Measure; tighten the cadence if it had to correct, relax it if it did not."""
+    global auto_interval, next_auto
+    sync("auto")
+    if not last_sync["detected"]:
+        next_auto = time.time() + 60          # never heard it: retry soon rather than back off
+        return
+    if abs(last_sync["shift_ms"]) >= 8: auto_interval = AUTO_FIRST
+    else: auto_interval = min(auto_interval * 2, AUTO_MAX)
+    next_auto = time.time() + auto_interval
+    print(f"[auto] next drift check in {auto_interval/60:.0f} min", flush=True)
+
 warned = 0.0; t_active = 0.0; last_stat = 0.0; recheck_done = True
 speaker_present = bt_connected(); auto_switched = False; last_present_check = 0.0; last_connect_try = 0.0
 try:
@@ -488,11 +563,15 @@ try:
             want = (mode is True) or (mode == "auto" and (age_h is None or age_h > CFG.get("sync_max_age_h", 6) or "total_pad_ms" not in LAT))
             if a.no_sync: want = False
             if want:
-                sync("startup"); recheck_done = False
+                sync("startup")
+                # a startup that locked on the first round needs no 40 s recheck;
+                # the adaptive check below covers it, with fewer chirps
+                recheck_done = last_sync["ok"] and last_sync["rounds"] <= 1
             else:
                 enforce_total("stored"); recheck_done = True
                 print(f"[active] using stored sync (delay {current_delay_ms():.0f} ms); ./resync.sh re-measures.", flush=True)
             t_active = now
+            auto_interval = AUTO_FIRST; next_auto = now + AUTO_FIRST; auto_due = 0.0
         elif not active and now - last_stat > 60:
             last_stat = now; print(f"[idle] input rms {level['rms']:.5f} ({'silence' if level['rms'] < 1e-4 else 'audio present'})", flush=True)
         elif active and not playing:
@@ -500,6 +579,13 @@ try:
         elif active:
             if not recheck_done and now - t_active > 40:
                 recheck_done = True; threading.Thread(target=sync, args=("recheck",), daemon=True).start()
+            elif AUTO_FIRST > 0 and now >= next_auto and not sync_lock.locked():
+                if auto_due == 0.0: auto_due = now
+                if level["rms"] > AUTO_LOUD_RMS and now - auto_due < 120:
+                    next_auto = now + 15          # loud passage: wait for a quieter one, but not forever
+                else:
+                    auto_due = 0.0; next_auto = now + auto_interval
+                    threading.Thread(target=auto_check, daemon=True).start()
             if now - last_stat > 30:
                 last_stat = now
                 print(f"[{int(now-t_active):5d}s] bt fill {ring_bt.fill/SR*1000:4.0f} ms mac fill {ring_mac.fill/SR*1000:4.0f} ms under bt={ring_bt.under} mac={ring_mac.under} "
