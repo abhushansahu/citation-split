@@ -3,7 +3,7 @@ import pychromecast, time, sys, subprocess, wave, threading
 import numpy as np, sounddevice as sd
 from scipy.io import wavfile
 from scipy.signal import stft
-IP="192.168.1.x"; MAC="192.168.1.y"; PORT=8765; SR=48000; DEV=5; F="06-sweep-20hz-20khz.wav"
+import os; IP=os.environ.get("SPEAKER_IP","192.168.1.x"); MAC=os.environ.get("MAC_IP","192.168.1.y"); PORT=8765; SR=48000; DEV=5; F="06-sweep-20hz-20khz.wav"
 OUT="/private/tmp/claude-501/-Users-abhushan-experiments/5d917b04-c5ca-4e19-b4cf-4fea4866979e/scratchpad"
 srv=subprocess.Popen([sys.executable,"-m","http.server",str(PORT),"--bind",MAC,"-d","/Users/abhushan/experiments/speaker-tests"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); time.sleep(1)
 with wave.open(f"/Users/abhushan/experiments/speaker-tests/{F}") as w: dur=w.getnframes()/w.getframerate()

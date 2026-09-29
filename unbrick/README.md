@@ -125,7 +125,7 @@ charge-only in normal operation.
 
 Read over the LAN (Cast setup API, no auth token needed for `eureka_info`):
 
-- `HK-Citation-200-…` on `_googlecast._tcp`, IP `192.168.1.x`, name "Office speaker"
+- `HK-Citation-200-…` on `_googlecast._tcp`, IP on the LAN (set `SPEAKER_IP` / `MAC_IP` for the cast scripts), name "Office speaker"
 - firmware `1.52.272222` stable-channel, `has_update: false`, `setup_state: 60`,
   `wpa_state: 10` (associated), uptime ~43 min at time of reading
 - current source: **Bluetooth Audio** (app id `89EA58C1`), volume 0.69

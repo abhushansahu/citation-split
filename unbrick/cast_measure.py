@@ -3,7 +3,7 @@ import pychromecast, time, sys, subprocess, wave, threading
 import numpy as np, sounddevice as sd
 from scipy.signal import welch
 from scipy.io import wavfile
-IP="192.168.1.x"; MAC="192.168.1.y"; PORT=8765; SR=48000; DEV=5
+import os; IP=os.environ.get("SPEAKER_IP","192.168.1.x"); MAC=os.environ.get("MAC_IP","192.168.1.y"); PORT=8765; SR=48000; DEV=5
 TESTS=[("03-woofer-150hz.wav",150),("04-midrange-1khz.wav",1000),("05-tweeter-10khz.wav",10000),("08-pink-noise.wav",None)]
 OUT="/private/tmp/claude-501/-Users-abhushan-experiments/5d917b04-c5ca-4e19-b4cf-4fea4866979e/scratchpad"
 

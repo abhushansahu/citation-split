@@ -1,7 +1,6 @@
 {
   "input_device": "Citation Split",
   "bt_device": "Office speaker",
-  "bt_address": "AA:BB:CC:DD:EE:FF",
   "mac_device": "MacBook Pro Speakers",
   "mic_device": "MacBook Pro Microphone",
   "block": 512,
@@ -47,10 +46,11 @@
   "_help_latency": "total_latency_ms: fixed app-to-ear latency the split enforces on BOTH paths, and the value the Citation Split device reports to apps so video players hold the picture back to match. Rebuild+reinstall the driver if you change it. Must exceed the worst Bluetooth latency plus ~100 ms.",
   "idle_after_s": 120,
   "volumes": {
-    "bt": 100,
+    "bt": 85,
     "mac": 100
   },
   "sync_on_activate": true,
   "sync_max_age_h": 6,
-  "_help_sync": "sync_on_activate: true (default) = measure with two quiet chirps on every activation, because Bluetooth latency changes each time its stream opens (seen: 157 vs 223 ms minutes apart); \"auto\" = only if the last measurement is older than sync_max_age_h (risks being tens of ms off); false = never, only ./resync.sh. The Citation Split input is a virtual device, not the microphone."
+  "_help_sync": "sync_on_activate: true (default) = measure with two quiet chirps on every activation, because Bluetooth latency changes each time its stream opens (seen: 157 vs 223 ms minutes apart); \"auto\" = only if the last measurement is older than sync_max_age_h (risks being tens of ms off); false = never, only ./resync.sh. The Citation Split input is a virtual device, not the microphone.",
+  "_help_local": "Put machine-specific values (bt_address, and optionally device names) in config.local.json, which is git-ignored and overlaid on this file."
 }

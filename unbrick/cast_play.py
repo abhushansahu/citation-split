@@ -1,6 +1,6 @@
 import warnings; warnings.filterwarnings("ignore")
 import pychromecast, time, sys, subprocess, os, wave
-IP="192.168.1.x"; MAC="192.168.1.y"; PORT=8765
+import os; IP=os.environ.get("SPEAKER_IP","192.168.1.x"); MAC=os.environ.get("MAC_IP","192.168.1.y"); PORT=8765
 files = sys.argv[1:]
 srv = subprocess.Popen([sys.executable,"-m","http.server",str(PORT),"--bind",MAC,"-d","/Users/abhushan/experiments/speaker-tests"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 time.sleep(1)

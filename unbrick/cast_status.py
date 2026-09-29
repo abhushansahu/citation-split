@@ -1,6 +1,6 @@
 import warnings; warnings.filterwarnings("ignore")
 import pychromecast, time
-IP="192.168.1.x"
+import os; IP=os.environ.get("SPEAKER_IP","192.168.1.x")
 cc = pychromecast.get_chromecast_from_host((IP, 8009, None, "HK Citation 200", "Office speaker"))
 cc.wait(timeout=15)
 s = cc.status

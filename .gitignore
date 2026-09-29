@@ -12,3 +12,4 @@ latency.json
 service.log
 tmp/
 .DS_Store
+config.local.json

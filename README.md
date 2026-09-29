@@ -179,7 +179,11 @@ Other keys:
 
 | key | meaning |
 | `bt_device`, `mac_device`, `input_device` | device names as macOS shows them |
-| `bt_address` | Bluetooth MAC of the speaker, used to auto-connect |
+| `bt_address` | Bluetooth MAC of the speaker, used to auto-connect (put it in `config.local.json`) |
+
+`config.local.json` (git-ignored, see `config.local.example.json`) holds
+your own speaker's Bluetooth address and any device-name overrides; it is
+laid over `config.json` at load time.
 
 `latency.json` holds the last locked delay and is only the starting guess
 for the next session's sync. `beep_level` in `config.json` sets the sync

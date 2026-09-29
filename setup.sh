@@ -14,7 +14,7 @@ echo "== 2/4 Python venv"
 
 echo "== 3/4 Checking devices"
 BT=$(python3 -c 'import json;print(json.load(open("config.json"))["bt_device"])')
-ADDR=$(python3 -c 'import json;print(json.load(open("config.json"))["bt_address"])')
+ADDR=$(python3 -c 'import json,os;c=json.load(open("config.json"));c.update(json.load(open("config.local.json")) if os.path.exists("config.local.json") else {});print(c["bt_address"])')
 blueutil --connect "$ADDR" 2>/dev/null || true
 sleep 2
 if ! SwitchAudioSource -a -t output | grep -q "BlackHole 2ch"; then

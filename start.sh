@@ -3,7 +3,7 @@
 # highs to the MacBook speakers. Ctrl-C (or ./stop.sh) restores normal output.
 cd "$(dirname "$0")"
 BT=$(python3 -c 'import json;print(json.load(open("config.json"))["bt_device"])')
-ADDR=$(python3 -c 'import json;print(json.load(open("config.json"))["bt_address"])')
+ADDR=$(python3 -c 'import json,os;c=json.load(open("config.json"));c.update(json.load(open("config.local.json")) if os.path.exists("config.local.json") else {});print(c["bt_address"])')
 MAC=$(python3 -c 'import json;print(json.load(open("config.json"))["mac_device"])')
 IN=$(python3 -c 'import json;print(json.load(open("config.json"))["input_device"])')
 VOL=${1:-85}   # ./start.sh 60  -> both physical outputs at 60 %

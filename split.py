@@ -27,7 +27,13 @@ from scipy.signal import butter, sosfilt, sosfilt_zi, sosfiltfilt, resample_poly
 from scipy.io import wavfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CFG = json.load(open(os.path.join(HERE, "config.json")))
+def load_config():
+    """config.json (tracked) with config.local.json (git-ignored: your own device addresses) laid over it."""
+    c = json.load(open(os.path.join(HERE, "config.json")))
+    lp = os.path.join(HERE, "config.local.json")
+    if os.path.exists(lp): c.update(json.load(open(lp)))
+    return c
+CFG = load_config()
 LATF = os.path.join(HERE, "latency.json")
 LAT = json.load(open(LATF)) if os.path.exists(LATF) else {"delay_ms": 200.0}
 
@@ -104,7 +110,13 @@ g_lo, g_hi = 10 ** (a.low_gain_db / 20), 10 ** (a.high_gain_db / 20)
 def reload_config(*_):
     global CFG, chain_bt, chain_mac, spec_bt, spec_mac
     try:
-        CFG = json.load(open(os.path.join(HERE, "config.json")))
+        def load_config():
+    """config.json (tracked) with config.local.json (git-ignored: your own device addresses) laid over it."""
+    c = json.load(open(os.path.join(HERE, "config.json")))
+    lp = os.path.join(HERE, "config.local.json")
+    if os.path.exists(lp): c.update(json.load(open(lp)))
+    return c
+CFG = load_config()
         nb, nm, sb, sm = build_chains()
         chain_bt, chain_mac, spec_bt, spec_mac = nb, nm, sb, sm
         print(f"[reload] citation {sb} | macbook {sm}", flush=True)
