@@ -7,13 +7,15 @@ the crossover with a 4th-order Linkwitz-Riley filter, and sends:
   high band (stereo) -> the MacBook speakers, delayed to match Bluetooth latency
 
 Bluetooth latency differs every time the stream is opened (tens of ms) and
-and then drifts slowly, so the delay is measured *inside* this process: it
-plays a quiet chirp pair (near 3 kHz via Bluetooth, near 11 kHz via the
-MacBook, both at the top of their own band so they are hard to notice),
-listens on the Mac mic, and shifts its own delay buffer until both arrive
-together. It repeats the measurement while playing -- first after two
-minutes, then backing off as long as nothing has moved. Send SIGUSR1
-(./resync.sh) to force one.
+and then drifts slowly, so the delay is measured *inside* this process, from
+the music itself: it keeps a rolling copy of what each output was sent,
+records the Mac mic, and correlates the two in a band only that output
+reaches, which gives both paths' lags from one recording. Their difference
+is the offset, and it shifts its delay buffer until that is near zero --
+adding no sound of its own. Quiet or narrow material falls back to a pair
+of quiet chirps. It re-measures while playing: first after two minutes,
+then backing off as long as nothing has moved. SIGUSR1 (./resync.sh) forces
+one.
 
 Each output device runs on its own clock; a ring buffer per output plus a
 slow servo (drop / repeat one sample per block when >10 ms off target)
@@ -184,7 +186,30 @@ def process(x):
             lo[:k] += b1[pos:pos + k]; hi[:k] += b8[pos:pos + k]
             inject[0][2] += k
             if inject[0][2] >= len(b1): inject.pop(0)
+    tap_push(lo, hi)
     ring_bt.push(lo); ring_mac.push(hi)
+
+# --- tap: a rolling copy of exactly what each output was sent ------------
+# This is the probe. The program audio already goes out both paths, so the mic
+# can be correlated against what we sent instead of against a chirp we add.
+# Both taps advance on one counter, so whatever error there is in lining the
+# mic recording up with them is identical for the two paths and cancels when
+# their lags are subtracted -- and the difference is the only thing sync needs.
+TAP_S = 10.0
+tap_n = int(TAP_S * SR)
+tap_lo = np.zeros(tap_n, np.float32); tap_hi = np.zeros(tap_n, np.float32); tap_w = 0
+tap_lock = threading.Lock()
+def tap_push(lo, hi):
+    global tap_w
+    with tap_lock:
+        k = len(lo); i = np.arange(tap_w, tap_w + k) % tap_n
+        tap_lo[i] = lo[:, 0]; tap_hi[i] = hi.mean(axis=1); tap_w += k
+def tap_read(n):
+    """The last n samples sent to each output, and the absolute index they end at."""
+    with tap_lock:
+        if tap_w < n or n > tap_n: return None, None, 0
+        i = np.arange(tap_w - n, tap_w) % tap_n
+        return np.array(tap_lo[i]), np.array(tap_hi[i]), tap_w
 
 stat = {"in": 0, "mac": 0, "bt": 0}
 level = {"rms": 0.0, "last_audio": 0.0}
@@ -263,7 +288,7 @@ def _matched_onsets(x, ref, band, n_expect):
 def measure_offset(nb=2, gap=0.6):
     """Inject nb chirp pairs, record the mic, return median (bt - mac) seconds."""
     mic_i = find(CFG.get("mic_device", "MacBook Pro Microphone"), "input")
-    lvl = a.beep_level
+    lvl = float(CFG.get("beep_level", a.beep_level))   # live, so ./tune.sh can change it
     dur = 0.5 + nb * gap + current_delay_ms() / 1000 + 0.6
     rec = sd.rec(int(dur * SR), samplerate=SR, channels=1, device=mic_i, dtype="float32")
     time.sleep(0.4)
@@ -285,12 +310,62 @@ def measure_offset(nb=2, gap=0.6):
     if not inl or not np.isfinite(np.median(inl)): return None, 0, mg
     return float(np.median(inl)), len(inl), mg
 
+# --- passive sync: correlate the mic against the program audio -------------
+# Each path owns a band the other barely reaches: below the MacBook's highpass
+# only the citation plays, above the citation's lowpass only the MacBook does.
+# Correlating the mic against the tap inside each of those bands gives each
+# path's acoustic lag, and their difference is the offset -- with no added sound.
+def _ana_bands():
+    o = CFG.get("outputs", {})
+    hp = o.get("macbook", {}).get("highpass_hz", a.crossover) or a.crossover
+    lp = o.get("citation", {}).get("lowpass_hz", a.crossover) or a.crossover
+    lo = CFG.get("passive_band_lo") or [120.0, max(250.0, hp * 0.6)]
+    hi = CFG.get("passive_band_hi") or [min(lp * 1.6, 9000.0), 12000.0]
+    return [float(lo[0]), float(lo[1])], [float(hi[0]), float(hi[1])]
+
+def _band_lag(mic_w, ref, band, maxlag, nfft):
+    """Lag in samples by which mic_w trails ref, from the cross-spectrum inside
+    band, phase-whitened so the peak is sharp regardless of program spectrum.
+    Returns (lag, confidence = peak over background)."""
+    f = np.fft.rfftfreq(nfft, 1 / SR)
+    keep = (f >= band[0]) & (f <= band[1])
+    if keep.sum() < 8: return None, 0.0
+    C = np.fft.rfft(mic_w, nfft) * np.conj(np.fft.rfft(ref, nfft))
+    C = np.where(keep, C / (np.abs(C) + 1e-12), 0)
+    c = np.abs(np.fft.irfft(C, nfft))[: maxlag + 1]
+    k = int(max(1, min(0.002 * SR, SR / (band[1] - band[0]))))
+    c = np.convolve(c, np.ones(k) / k, "same")
+    i = int(np.argmax(c)); bg = float(np.median(c)) + 1e-20
+    return i, float(c[i]) / bg
+
+PASSIVE_MIN_CONF = 8.0
+def measure_offset_passive(secs=None, maxlag_s=1.5):
+    """Listen to the program audio on the mic and return (bt - mac) seconds."""
+    secs = float(secs or CFG.get("passive_secs", 4.0))
+    band_lo, band_hi = _ana_bands()
+    mic_i = find(CFG.get("mic_device", "MacBook Pro Microphone"), "input")
+    nm = int(secs * SR); L = int(maxlag_s * SR)
+    rec = sd.rec(nm, samplerate=SR, channels=1, device=mic_i, dtype="float32")
+    sd.wait()
+    ref_lo, ref_hi, _ = tap_read(nm + L)      # taken after the recording, so it covers it
+    if ref_lo is None: return None, 0.0, 0.0
+    m = rec[:, 0]
+    if float(np.sqrt(np.mean(m * m))) < 1e-4: return None, 0.0, 0.0
+    mic_w = np.zeros(nm + L, np.float32); mic_w[L:] = m    # same window as the tap
+    nfft = 1 << int(np.ceil(np.log2(2 * (nm + L))))
+    d_lo, c_lo = _band_lag(mic_w, ref_lo, band_lo, L, nfft)
+    d_hi, c_hi = _band_lag(mic_w, ref_hi, band_hi, L, nfft)
+    if d_lo is None or d_hi is None: return None, 0.0, 0.0
+    conf = min(c_lo, c_hi)
+    if conf < PASSIVE_MIN_CONF: return None, conf, 0.0
+    return (d_lo - d_hi) / SR, conf, min(d_lo, d_hi) / SR
+
 def measure_claim_gap(n=3):
     """Play a chirp INTO the virtual device (as an app would), note when the device claims it will
     play (DAC time), and hear it on the mic. Returns median (claim - heard) seconds: >0 means we
     play EARLY versus what apps are told, so both paths need that much more delay."""
     out_i = find(in_name, "output"); mic_i = find(CFG.get("mic_device", "MacBook Pro Microphone"), "input")
-    lvl = a.beep_level * 1.5
+    lvl = float(CFG.get("beep_level", a.beep_level)) * 1.5
     sig = np.zeros((int(1.2 * SR), 2), np.float32); at = int(0.4 * SR)
     sig[at:at + len(CHIRP_HI), 0] += lvl * CHIRP_HI; sig[at:at + len(CHIRP_LO), 0] += lvl * CHIRP_LO; sig[:, 1] = sig[:, 0]
     gaps = []
@@ -319,7 +394,10 @@ def enforce_total(tag):
     smaller by dD. So: measure once, then derive; re-measure on resync."""
     global applied_pad
     if not CFG.get("total_latency_ms"): return
-    if "total_pad_ms" not in LAT or "pad_at_delay_ms" not in LAT or tag == "resync":
+    # The pad is derived from how far the delay has moved, so re-measuring it is a
+    # refinement -- and the only thing left that has to make a sound. Opt in.
+    stale = "total_pad_ms" not in LAT or "pad_at_delay_ms" not in LAT
+    if stale or (tag == "resync" and CFG.get("pad_remeasure_on_resync", False)):
         g = measure_claim_gap()
         if g is None:
             print(f"[{tag}] could not measure app-to-ear gap (chirp not heard)", flush=True)
@@ -362,27 +440,41 @@ def sync(tag="sync"):
 def _sync(tag):
     global muted
     if not settled(): print(f"[{tag}] buffers not settled after 45 s; measuring anyway", flush=True)
-    # "auto" is the unattended drift check; muting program audio every few minutes
-    # would be far more noticeable than the chirps it hides. The matched filter
-    # digs them out from under the music instead, and a measurement that does not
-    # convince is discarded rather than applied.
+    # "passive" reads the program audio and adds nothing audible; "chirp" always
+    # injects; "auto" (default) is passive, dropping to chirps only when the
+    # material gives no usable fix -- silence, or nothing in one path's band.
+    method = CFG.get("sync_method", "auto")
+    use_chirp = (method == "chirp")
     mute_mode = CFG.get("sync_mute", "auto")
-    muted = (mute_mode is True) or (mute_mode == "auto" and tag != "auto")
-    time.sleep(0.2)
     ok = False; rounds = 0; shifted = 0.0; margin = 0.0; detected = False
     try:
         for rnd in range(5):
             rounds = rnd + 1
-            off, n, mg = measure_offset()
+            if use_chirp:
+                # chirps are the only case that needs the programme out of the way
+                muted = (mute_mode is True) or (mute_mode == "auto" and tag != "auto")
+                time.sleep(0.2)
+                try: off, n, mg = measure_offset()
+                finally: muted = False
+                how = f"{n} beeps, margin {mg:.1f}x"
+                if off is None or not np.isfinite(off):
+                    print(f"[{tag}] round {rounds}: chirps not detected (best margin {mg:.1f}x, need {MARGIN:.0f}x); "
+                          f"Mac within ~1 m of the speaker? volumes up? (beep_level in config.json)", flush=True); continue
+            else:
+                off, mg, _ = measure_offset_passive()
+                how = f"program audio, confidence {mg:.1f}x"
+                if off is None or not np.isfinite(off):
+                    tail = "; falling back to chirps" if method == "auto" else ""
+                    print(f"[{tag}] round {rounds}: no usable fix from the programme "
+                          f"(confidence {mg:.1f}x, need {PASSIVE_MIN_CONF:.0f}x){tail}", flush=True)
+                    if method == "auto": use_chirp = True
+                    continue
             margin = mg
-            if off is None or not np.isfinite(off):
-                print(f"[{tag}] round {rounds}: chirps not detected (best margin {mg:.1f}x, need {MARGIN:.0f}x); "
-                      f"Mac within ~1 m of the speaker? volumes up? (beep_level / chirp_band_lo in config.json)", flush=True); continue
             # the servos will still remove their current smoothed fill errors, so correct for where the paths will REST
             off = off - (ring_bt.err_s - ring_mac.err_s) / SR
             if not np.isfinite(off): continue
             detected = True
-            print(f"[{tag}] round {rounds}: bluetooth {off*1000:+.0f} ms vs MacBook (at rest) at delay {current_delay_ms():.0f} ms ({n} beeps, margin {mg:.1f}x)", flush=True)
+            print(f"[{tag}] round {rounds}: bluetooth {off*1000:+.0f} ms vs MacBook (at rest) at delay {current_delay_ms():.0f} ms ({how})", flush=True)
             if abs(off) <= 0.008: ok = True; break
             ring_mac.shift(off * SR)      # BT late -> more Mac delay; BT early -> less
             shifted += off * 1000
@@ -581,7 +673,8 @@ try:
                 recheck_done = True; threading.Thread(target=sync, args=("recheck",), daemon=True).start()
             elif AUTO_FIRST > 0 and now >= next_auto and not sync_lock.locked():
                 if auto_due == 0.0: auto_due = now
-                if level["rms"] > AUTO_LOUD_RMS and now - auto_due < 120:
+                if (CFG.get("sync_method", "auto") == "chirp" and level["rms"] > AUTO_LOUD_RMS
+                        and now - auto_due < 120):
                     next_auto = now + 15          # loud passage: wait for a quieter one, but not forever
                 else:
                     auto_due = 0.0; next_auto = now + auto_interval

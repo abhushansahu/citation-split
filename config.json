@@ -4,7 +4,7 @@
   "mac_device": "MacBook Pro Speakers",
   "mic_device": "MacBook Pro Microphone",
   "block": 512,
-  "beep_level": 0.06,
+  "beep_level": 0.01,
   "outputs": {
     "citation": {
       "lowpass_hz": 3500,
@@ -55,17 +55,21 @@
   "_help_local": "Put machine-specific values (bt_address, and optionally device names) in config.local.json, which is git-ignored and overlaid on this file.",
   "chirp_len_s": 0.25,
   "chirp_band_lo": [
-    2600,
-    3400
+    150,
+    900
   ],
   "chirp_band_hi": [
-    9000,
-    14000
+    10000,
+    15000
   ],
   "sync_mute": "auto",
   "sync_check_s": 120,
   "sync_check_max_s": 900,
   "sync_defer_rms": 0.1,
-  "_help_chirps": "The sync chirps. chirp_band_lo goes out the citation (keep it under its lowpass_hz), chirp_band_hi out the MacBook. Both sit at the top of their path because that is where they are hardest to notice; chirp_len_s is long to buy back the detection SNR that narrow bands and a low beep_level cost. Every measurement logs 'margin Nx' -- the correlation peak over the background, needing 6x. If margin runs near 6x, widen chirp_band_lo (e.g. [2000, 3400]) or raise beep_level. sync_mute: \"auto\" (default) mutes program audio for startup and ./resync.sh measurements but not for the periodic drift check, true always mutes, false never does.",
-  "_help_drift": "The Bluetooth stack's delay drifts mid-session and the ring buffers cannot see it, so the drift check is acoustic. sync_check_s: first check this long after audio starts (0 disables). If it found less than 8 ms it doubles the wait, up to sync_check_max_s; if it had to correct, it goes back to sync_check_s. A check is postponed up to 120 s while input RMS is above sync_defer_rms, so it lands in a quiet passage where the measurement is cleanest."
+  "_help_chirps": "Fallback probe only -- sync_method \"auto\" measures from the programme itself and reaches for these just when that gives no usable fix. chirp_band_lo goes out the citation (keep it under its lowpass_hz), chirp_band_hi out the MacBook; both avoid 2-5 kHz, where hearing is most sensitive. chirp_len_s is long to buy back the detection SNR a low beep_level costs. Measurements log 'margin Nx', the correlation peak over the background, needing 6x; if it runs near 6x, raise beep_level. sync_mute: \"auto\" mutes program audio for chirp measurements except the periodic drift check, true always, false never.",
+  "_help_drift": "The Bluetooth stack's delay drifts mid-session and the ring buffers cannot see it, so the drift check is acoustic. sync_check_s: first check this long after audio starts (0 disables). If it found less than 8 ms it doubles the wait, up to sync_check_max_s; if it had to correct, it goes back to sync_check_s. A check is postponed up to 120 s while input RMS is above sync_defer_rms, so it lands in a quiet passage where the measurement is cleanest.",
+  "sync_method": "auto",
+  "passive_secs": 4.0,
+  "_help_passive": "sync_method: \"auto\" (default) measures the delay from the music already playing -- the mic is correlated against what each output was actually sent, so nothing audible is added; \"chirp\" always uses the chirps; \"passive\" never does. Each path is read in a band the other barely reaches (below the MacBook's highpass, above the citation's lowpass), overridable with passive_band_lo / passive_band_hi. passive_secs is how much audio each read uses -- longer is more accurate and slower. Measurements log 'confidence Nx', which needs 8x; quiet or very narrow-band material falls short and drops to chirps. pad_remeasure_on_resync: ./resync.sh re-measures the app-to-ear pad with a chirp played into the device; off by default because enforce_total already derives the pad from how far the delay moved.",
+  "pad_remeasure_on_resync": false
 }

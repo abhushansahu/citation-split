@@ -63,7 +63,8 @@ harmless.
 
 Only during a sync measurement: about 2 s of the Mac mic while the quiet
 chirps play. That happens on every activation by default, and again on the
-drift check described below, because the Bluetooth latency changes each time
+drift check described below. The default passive method adds no sound of its
+own, but it still listens. This happens because the Bluetooth latency changes each time
 its stream is opened (157 vs 223 ms were seen minutes apart) and then keeps
 drifting, so a stored value can be tens of ms off. `"auto"` uses
 the stored value when the last measurement is younger than `sync_max_age_h`;
@@ -119,19 +120,33 @@ skipped. Keep the Mac within a metre or so of the speaker and the room
 reasonably quiet for those few seconds. This happens inside the running
 process because Bluetooth latency can change each time the stream is opened.
 
-Both chirps sit at the top of their own band -- `chirp_band_lo` just under the
-citation's lowpass, `chirp_band_hi` near the top of hearing -- which is where
-they are hardest to notice. Narrow bands blunt the matched filter that finds
-them, so `chirp_len_s` (250 ms) is long enough to pay that back: what matters
-for detection is `beep_level` squared times length. Every measurement logs its
-margin, the correlation peak over the background, which needs to clear 6x:
+### Measuring without making a sound
+
+Chirps are the fallback. By default (`sync_method: "auto"`) the split measures
+from the music that is already playing: it keeps a rolling copy of exactly what
+each output was sent, records a few seconds of mic, and correlates the two.
+Each path owns a band the other barely reaches -- below the MacBook's highpass
+only the speaker plays, above the citation's lowpass only the MacBook does --
+so one recording yields both lags, and their difference is the offset.
+
+The trick that makes this work is that both taps advance on a single sample
+counter, so whatever error there is in lining the recording up with them is
+*identical for the two paths and cancels in the subtraction*. Only the
+difference matters, so the absolute time origin never has to be known.
 
 ```
-[auto] round 1: bluetooth +12 ms vs MacBook (at rest) at delay 176 ms (2 beeps, margin 31.4x)
+[auto] round 1: bluetooth +6 ms vs MacBook (at rest) at delay 176 ms (program audio, confidence 61.4x)
 ```
 
-If that margin runs near 6x, the mic is barely hearing the chirps: widen
-`chirp_band_lo` (say `[2000, 3400]`) or raise `beep_level`.
+Confidence is the correlation peak over the background and has to clear 8x.
+Silence, or material with nothing in one path's band, falls short; then it
+drops to the chirps for that round and says so. `"passive"` never chirps (and
+simply fails on unsuitable material); `"chirp"` always does.
+
+When the chirps do run, they avoid 2-5 kHz, where hearing is most sensitive,
+and they are quiet: `beep_level` 0.01. Each measurement logs a margin, the
+correlation peak over the background, needing 6x; measured on hardware at
+~45x, so there is room to go quieter still if you ever hear them.
 
 ### Drift, and why it is measured rather than computed
 
@@ -222,8 +237,10 @@ laid over `config.json` at load time.
 `latency.json` holds the last locked delay and is only the starting guess
 for the next session's sync. `beep_level` in `config.json` sets the sync
 chirp loudness (0 to 1, default 0.06); `chirp_band_lo` / `chirp_band_hi` /
-`chirp_len_s` set where and how long they are, and `sync_check_s` /
-`sync_check_max_s` / `sync_defer_rms` / `sync_mute` govern the drift check.
+`chirp_len_s` set where and how long they are, `sync_method` / `passive_secs` /
+`passive_band_lo` / `passive_band_hi` govern measuring from the programme, and
+`sync_check_s` / `sync_check_max_s` / `sync_defer_rms` / `sync_mute` the drift
+check.
 
 ## How it holds sync
 
@@ -266,8 +283,7 @@ latency.json  measured delay
 - **Smeared / doubled transients:** paths out of sync. The drift check
   normally catches this within a couple of minutes; `./resync.sh` forces it
   now. If it keeps coming back, check the `margin` in the log -- a margin near
-  6x means the chirps are barely being heard and corrections are being
-  discarded.
+  8x (or a chirp margin near 6x) means measurements are being discarded.
 - **Harsh or thin:** the laptop is now the tweeter and sits closer to you
   than the speaker. Lower it: `./vol.sh 65 40`.
 - **Choppy on the speaker only:** Bluetooth link. Move the Mac closer, or off
