@@ -250,3 +250,9 @@ hold the picture back longer before starting; playback itself is unaffected.
 - Highs come from the laptop, lows from the speaker. The image follows the
   laptop.
 - Stopgap only. The real fix is a replacement tweeter.
+
+## Licence
+
+MIT for everything in this repository. The virtual device you build with
+`build-driver.sh` is a derivative of [BlackHole](https://github.com/ExistentialAudio/BlackHole)
+and therefore GPL-3.0; see `LICENSE`.
